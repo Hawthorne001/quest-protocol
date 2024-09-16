@@ -17,6 +17,7 @@ import {LibZip} from "solady/utils/LibZip.sol";
 import {IERC1155} from "openzeppelin-contracts/token/ERC1155/IERC1155.sol";
 import {IQuestOwnable} from "./interfaces/IQuestOwnable.sol";
 import {IQuest1155Ownable} from "./interfaces/IQuest1155Ownable.sol";
+import {Quest as QuestContract} from "./Quest.sol";
 
 /// @title QuestFactory
 /// @author RabbitHole.gg
@@ -54,6 +55,8 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
     uint16 public referralFee;
     address private __deprecated_sablierV2LockupLinearAddress; // not used
     mapping(address => address) private __deprecated_mintFeeRecipientList; // not used
+    uint256 public referralRewardTimestamp;
+    uint16 public referralRewardFee; // fee on erc20 token
     // insert new vars here at the end to keep the storage layout the same
 
     /*//////////////////////////////////////////////////////////////
@@ -74,7 +77,7 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
         uint256 mintFee_
     ) external initializer {
         _initializeOwner(ownerAddress_);
-        questFee = 2000; // in BIPS
+        questFee = 250; // in BIPS
         locked = 1;
         claimSignerAddress = claimSignerAddress_;
         protocolFeeRecipient = protocolFeeRecipient_;
@@ -82,6 +85,8 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
         erc1155QuestAddress = erc1155QuestAddress_;
         referralFee = referralFee_;
         mintFee = mintFee_;
+        referralRewardTimestamp = block.timestamp;
+        referralRewardFee = 250; // in BIPS
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -141,8 +146,9 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
     /// @param questId_ The id of the quest
     /// @param actionType_ The action type for the quest
     /// @param questName_ The name of the quest
+    /// @param projectName_ The name of the project/protocol used for the quest
     /// @return address the quest contract address
-    function createERC20Quest(
+    function createERC20Boost(
         uint32 txHashChainId_,
         address rewardTokenAddress_,
         uint256 endTime_,
@@ -166,7 +172,52 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
                 actionType_,
                 questName_,
                 "erc20",
-                projectName_
+                projectName_,
+                referralRewardFee
+            )
+        );
+    }
+
+    /// @dev Create an erc20 quest and start it at the same time. The function will transfer the reward amount to the quest contract
+    /// @param txHashChainId_ The chain id of the chain the txHash is on
+    /// @param rewardTokenAddress_ The contract address of the reward token
+    /// @param endTime_ The end time of the quest
+    /// @param startTime_ The start time of the quest
+    /// @param totalParticipants_ The total amount of participants (accounts) the quest will have
+    /// @param rewardAmount_ The reward amount for an erc20 quest
+    /// @param questId_ The id of the quest
+    /// @param actionType_ The action type for the quest
+    /// @param questName_ The name of the quest
+    /// @param projectName_ The name of the project/protocol used for the quest
+    /// @param referralRewardFee_ The fee amount for referrals -- this is no longer used since we now have a flat 2.5% fee
+    /// @return address the quest contract address
+    function createERC20Quest(
+        uint32 txHashChainId_,
+        address rewardTokenAddress_,
+        uint256 endTime_,
+        uint256 startTime_,
+        uint256 totalParticipants_,
+        uint256 rewardAmount_,
+        string memory questId_,
+        string memory actionType_,
+        string memory questName_,
+        string memory projectName_,
+        uint256 referralRewardFee_
+    ) external checkQuest(questId_) returns (address) {
+        return createERC20QuestInternal(
+            ERC20QuestData(
+                txHashChainId_,
+                rewardTokenAddress_,
+                endTime_,
+                startTime_,
+                totalParticipants_,
+                rewardAmount_,
+                questId_,
+                actionType_,
+                questName_,
+                "erc20",
+                projectName_,
+                referralRewardFee
             )
         );
     }
@@ -287,7 +338,8 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
                 actionType_,
                 questName_,
                 "erc20",
-                ""
+                "",
+                referralRewardFee
             )
         );
     }
@@ -315,9 +367,18 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
                 "",
                 "",
                 "erc20",
-                ""
+                "",
+                referralRewardFee
             )
         );
+    }
+
+    function cancelQuest(string calldata questId_) external {
+        Quest storage _questData = quests[questId_];
+        if (_questData.questCreator != msg.sender) revert Unauthorized();
+        IQuestOwnable quest = IQuestOwnable(_questData.questAddress);
+        quest.cancel();
+        emit QuestCancelled(_questData.questAddress, questId_, quest.endTime());
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -419,7 +480,29 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
             emit QuestClaimed(claimer_, quest.questAddress, questId_, rewardToken_, rewardAmountOrTokenId);
         }
         if(ref_ != address(0)){
-            emit QuestClaimedReferred(claimer_, quest.questAddress, questId_, rewardToken_, rewardAmountOrTokenId, ref_, 3333, mintFee);
+            if (IQuestOwnable(quest.questAddress).startTime() > referralRewardTimestamp) {
+                emit QuestClaimReferred(
+                    claimer_,
+                    quest.questAddress,
+                    questId_,
+                    rewardToken_,
+                    rewardAmountOrTokenId,
+                    ref_, 3333,
+                    mintFee,
+                    QuestContract(payable(quest.questAddress)).referralRewardFee(),
+                    QuestContract(payable(quest.questAddress)).referralRewardAmount())
+                ;
+            } else {
+                emit QuestClaimedReferred(
+                    claimer_,
+                    quest.questAddress,
+                    questId_,
+                    rewardToken_,
+                    rewardAmountOrTokenId,
+                    ref_, 3333,
+                    mintFee
+                );
+            }
             emit MintFeePaid(questId_, address(0), 0, address(0), 0, ref_, mintFee / 3);
         }
     }
@@ -469,6 +552,14 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
         questFee = questFee_;
     }
 
+    /// @dev set the referral reward fee (erc20 tokens)
+    /// @notice the referral reward fee should be in Basis Point units
+    /// @param referralRewardFee_ The referral reward fee value
+    function setReferralRewardFee(uint16 referralRewardFee_) external onlyOwner {
+        if (referralRewardFee_ > 10_000) revert ReferralFeeTooHigh();
+        referralRewardFee = referralRewardFee_;
+    }
+
     /// @dev set the referral fee
     /// @param referralFee_ The value of the referralFee
     function setReferralFee(uint16 referralFee_) external onlyOwner {
@@ -482,6 +573,10 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
     function setDefaultMintFeeRecipient(address mintFeeRecipient_) external onlyOwner {
         if (mintFeeRecipient_ == address(0)) revert AddressZeroNotAllowed();
         defaultMintFeeRecipient = mintFeeRecipient_;
+    }
+
+    function setReferralRewardTimestamp(uint256 timestamp_) external onlyOwner {
+        referralRewardTimestamp = timestamp_;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -613,16 +708,31 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
         );
 
         if (claimData_.ref != address(0)) {
-            emit QuestClaimedReferred(
-                claimData_.claimer,
-                currentQuest.questAddress,
-                claimData_.questId,
-                questContract_.rewardToken(),
-                questContract_.tokenId(),
-                claimData_.ref,
-                3333, //referralFee,
-                mintFee
+            if (IQuestOwnable(currentQuest.questAddress).startTime() > referralRewardTimestamp) {
+                emit QuestClaimReferred(
+                    claimData_.claimer,
+                    currentQuest.questAddress,
+                    claimData_.questId,
+                    questContract_.rewardToken(),
+                    questContract_.tokenId(),
+                    claimData_.ref,
+                    3333, //referralFee,
+                    mintFee,
+                    0,
+                    0
                 );
+            } else {
+                emit QuestClaimedReferred(
+                    claimData_.claimer,
+                    currentQuest.questAddress,
+                    claimData_.questId,
+                    questContract_.rewardToken(),
+                    questContract_.tokenId(),
+                    claimData_.ref,
+                    3333, //referralFee,
+                    mintFee
+                );
+            }
         }
     }
 
@@ -665,16 +775,31 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
         );
 
         if (claimData_.ref != address(0)) {
-            emit QuestClaimedReferred(
-                claimData_.claimer,
-                currentQuest.questAddress,
-                claimData_.questId,
-                questContract_.rewardToken(),
-                questContract_.rewardAmountInWei(),
-                claimData_.ref,
-                3333, //referralFee,
-                mintFee
-            );
+            if (IQuestOwnable(currentQuest.questAddress).startTime() > referralRewardTimestamp) {
+                emit QuestClaimReferred(
+                    claimData_.claimer,
+                    currentQuest.questAddress,
+                    claimData_.questId,
+                    questContract_.rewardToken(),
+                    questContract_.rewardAmountInWei(),
+                    claimData_.ref,
+                    3333, //referralFee,
+                    mintFee,
+                    0,
+                    0
+                );
+            } else {
+                emit QuestClaimedReferred(
+                    claimData_.claimer,
+                    currentQuest.questAddress,
+                    claimData_.questId,
+                    questContract_.rewardToken(),
+                    questContract_.rewardAmountInWei(),
+                    claimData_.ref,
+                    3333, //referralFee,
+                    mintFee
+                );
+            }
         }
     }
 
@@ -742,6 +867,7 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
         currentQuest.actionType = data_.actionType;
         currentQuest.questName = data_.questName;
         currentQuest.txHashChainId = data_.txHashChainId;
+        currentQuest.referralRewardFee = data_.referralRewardFee;
 
         emit QuestCreated(
             msg.sender,
@@ -767,7 +893,8 @@ contract QuestFactory is Initializable, LegacyStorage, OwnableRoles, IQuestFacto
             data_.rewardAmount,
             data_.questId,
             questFee,
-            protocolFeeRecipient
+            protocolFeeRecipient,
+            referralRewardFee
         );
 
         transferTokensAndOwnership(newQuest, data_.rewardTokenAddress);

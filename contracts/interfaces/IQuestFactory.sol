@@ -46,6 +46,7 @@ interface IQuestFactory {
         string actionType;
         string questName;
         uint32 txHashChainId;
+        uint16 referralRewardFee;
     }
 
     struct QuestData {
@@ -89,6 +90,7 @@ interface IQuestFactory {
         string questName;
         string questType;
         string projectName;
+        uint16 referralRewardFee;
     }
 
     struct ERC1155QuestData {
@@ -109,6 +111,8 @@ interface IQuestFactory {
     event MintFeeSet(uint256 mintFee);
     event NftQuestFeeListSet(address[] addresses, uint256[] fees);
     event NftQuestFeeSet(uint256 nftQuestFee);
+
+    event QuestCancelled(address indexed questAddress, string questId, uint256 endsAt);
 
     event QuestClaimedData(
         address indexed recipient,
@@ -138,6 +142,18 @@ interface IQuestFactory {
         address referrer,
         uint16 referralFee,
         uint256 mintFeeEthWei
+    );
+    event QuestClaimReferred(
+        address indexed recipient,
+        address indexed questAddress,
+        string questId,
+        address rewardToken,
+        uint256 rewardAmountInWeiOrTokenId,
+        address referrer,
+        uint16 referralFee,
+        uint256 mintFeeEthWei,
+        uint256 tokenReferralFee,
+        uint256 referralClaimAmount
     );
     event MintFeePaid(
         string questId,
@@ -179,8 +195,36 @@ interface IQuestFactory {
         string memory actionType,
         string memory questName
     ) external pure returns (string memory);
-
+    function questFee() external view returns (uint16);
+    function referralRewardFee() external view returns (uint16);
+    
     // Create
+    function createERC20Boost(
+        uint32 txHashChainId_,
+        address rewardTokenAddress_,
+        uint256 endTime_,
+        uint256 startTime_,
+        uint256 totalParticipants_,
+        uint256 rewardAmount_,
+        string memory questId_,
+        string memory actionType_,
+        string memory questName_,
+        string memory projectName_
+    ) external returns (address);
+    function createERC20Quest(
+        uint32 txHashChainId_,
+        address rewardTokenAddress_,
+        uint256 endTime_,
+        uint256 startTime_,
+        uint256 totalParticipants_,
+        uint256 rewardAmount_,
+        string memory questId_,
+        string memory actionType_,
+        string memory questName_,
+        string memory projectName_,
+        uint256 referralRewardFee_
+    ) external returns (address);
+
     function create1155QuestAndQueue(
         address rewardTokenAddress_,
         uint256 endTime_,
@@ -192,6 +236,8 @@ interface IQuestFactory {
     ) external payable returns (address);
 
     function claimOptimized(bytes calldata signature_, bytes calldata data_) external payable;
+
+    function cancelQuest(string calldata questId_) external;
 
     // Set
     function setClaimSignerAddress(address claimSignerAddress_) external;

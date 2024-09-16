@@ -1,0 +1,48 @@
+{
+  "transactions": [
+    {
+      "hash": "0xe4735b3f201321e508f0b72e15b778a01b01b0590ec70ee7009a9e8bf43ec7d5",
+      "transactionType": "CALL",
+      "contractName": "TransparentUpgradeableProxy",
+      "contractAddress": "0x52629961F71C1C2564C5aa22372CB1b9fa9EBA3E",
+      "function": null,
+      "arguments": null,
+      "transaction": {
+        "type": "0x02",
+        "from": "0x017f8ad14a2e745ea0f756bd57cd4852400be78c",
+        "to": "0x52629961f71c1c2564c5aa22372cb1b9fa9eba3e",
+        "gas": "0x11e1d",
+        "value": "0x0",
+        "data": "0x23e2c1ba0000000000000000000000000000000000000000000000000000000066203669",
+        "nonce": "0x18",
+        "accessList": []
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    }
+  ],
+  "receipts": [
+    {
+      "transactionHash": "0xe4735b3f201321e508f0b72e15b778a01b01b0590ec70ee7009a9e8bf43ec7d5",
+      "transactionIndex": "0x1",
+      "blockHash": "0xe63b00d6f483f337a28db2641d5e7e75239147f644bc8f7bfe54b5e3868f07df",
+      "blockNumber": "0x22ec1e",
+      "from": "0x017F8Ad14A2E745ea0F756Bd57CD4852400be78c",
+      "to": "0x52629961F71C1C2564C5aa22372CB1b9fa9EBA3E",
+      "cumulativeGasUsed": "0x18686",
+      "gasUsed": "0xcf25",
+      "contractAddress": null,
+      "logs": [],
+      "status": "0x1",
+      "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "type": "0x2",
+      "effectiveGasPrice": "0xb2d05f0f"
+    }
+  ],
+  "libraries": [],
+  "pending": [],
+  "returns": {},
+  "timestamp": 1713387160,
+  "chain": 81457,
+  "commit": "da7e09c"
+}

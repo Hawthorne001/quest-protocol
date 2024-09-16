@@ -40,6 +40,11 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
     address public protocolFeeRecipient;
     mapping(uint256 => bool) private claimedList;
     mapping(address => uint256) public streamIdForAddress;
+    uint256 public referralRewardFee;
+    uint256 public referralClaimTotal;
+    mapping (address => uint256) private referralClaimAmounts;
+    mapping (address => bool) private referrerHasClaimed;
+    uint256 public totalReferralsFeesClaimed;
 
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
@@ -58,7 +63,8 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
         uint256 rewardAmountInWei_,
         string memory questId_,
         uint16 questFee_,
-        address protocolFeeRecipient_
+        address protocolFeeRecipient_,
+        uint16 referralRewardFee_
     ) external initializer {
         // Validate inputs
         if (endTime_ <= block.timestamp) revert EndTimeInPast();
@@ -77,6 +83,9 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
         // Setup default state
         questFactoryContract = IQuestFactory(payable(msg.sender));
         queued = true;
+        referralClaimTotal = 0;
+        totalReferralsFeesClaimed = 0;
+        referralRewardFee = referralRewardFee_;
         _initializeOwner(msg.sender);
         __Pausable_init();
         __ReentrancyGuard_init();
@@ -111,16 +120,12 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
     /*//////////////////////////////////////////////////////////////
                             EXTERNAL UPDATE
     //////////////////////////////////////////////////////////////*/
-    /// @notice Pauses the Quest
-    /// @dev Only the owner of the Quest can call this function. Also requires that the Quest has started (not by date, but by calling the start function)
-    function pause() external onlyOwner {
-        _pause();
-    }
 
-    /// @notice Unpauses the Quest
-    /// @dev Only the owner of the Quest can call this function. Also requires that the Quest has started (not by date, but by calling the start function)
-    function unPause() external onlyOwner {
-        _unpause();
+    /// @notice Cancels the Quest by setting the end time to 15 minutes from the current time and pausing the Quest. If the Quest has not yet started, it will end immediately.
+    /// @dev Only the owner of the Quest can call this function.
+    function cancel() external onlyQuestFactory whenNotPaused whenNotEnded {
+        _pause();
+        endTime = startTime > block.timestamp ? block.timestamp : block.timestamp + 15 minutes;
     }
 
     /// @dev transfers rewards to the account, can only be called once per account per quest and only by the quest factory
@@ -135,11 +140,15 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
     {
         uint256 totalRedeemableRewards = rewardAmountInWei;
         _transferRewards(account_, totalRedeemableRewards);
+
     }
 
     function claimFromFactory(address claimer_, address ref_) external payable whenNotEnded onlyQuestFactory {
         _transferRewards(claimer_, rewardAmountInWei);
-        if (ref_ != address(0)) ref_.safeTransferETH(_claimFee() / 3);
+        if (ref_ != address(0)) {
+            ref_.safeTransferETH(_claimFee() / 3);
+            _updateReferralTokenAmount(ref_);
+        }
     }
 
     /// @notice Function that transfers all 1155 tokens in the contract to the owner (creator), and eth to the protocol fee recipient and the owner
@@ -155,21 +164,33 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
         protocolFeeRecipient.safeTransferETH(protocolPayout);
 
         // transfer reward tokens
-        uint256 protocolFeeForRecipient = this.protocolFee() / 2;
+        uint256 protocolFeeForRecipient = this.protocolFee();
         rewardToken.safeTransfer(protocolFeeRecipient, protocolFeeForRecipient);
 
-        uint256 remainingBalanceForOwner = rewardToken.balanceOf(address(this));
+        uint256 remainingBalanceForOwner = rewardToken.balanceOf(address(this)) - (referralClaimTotal - totalReferralsFeesClaimed);
         rewardToken.safeTransfer(owner(), remainingBalanceForOwner);
 
         questFactoryContract.withdrawCallback(questId, protocolFeeRecipient, protocolPayout, address(owner()), ownerPayout);
     }
 
+    function claimReferralFees(address referrer) external onlyWithdrawAfterEnd {
+        if (referrerHasClaimed[referrer] == true) revert AlreadyWithdrawn();
+
+        uint256 referrerClaimAmount = referralClaimAmounts[referrer];
+        if (referrerClaimAmount == 0) revert NoReferralFees();
+
+        rewardToken.safeTransfer(referrer, referrerClaimAmount);
+        referrerHasClaimed[referrer] = true;
+        totalReferralsFeesClaimed += referrerClaimAmount;
+        emit ClaimedReferralFees(questId, referrer, address(rewardToken), referrerClaimAmount);
+    }
+
     /*//////////////////////////////////////////////////////////////
                              EXTERNAL VIEW
     //////////////////////////////////////////////////////////////*/
-    /// @dev The amount of tokens the quest needs to pay all redeemers plus the protocol fee
+    /// @dev The amount of tokens the quest creator needs to pay all redeemers, the protocol fee, and the referral fee
     function totalTransferAmount() external view returns (uint256) {
-        return this.maxTotalRewards() + this.maxProtocolReward();
+        return this.maxTotalRewards() + this.maxProtocolReward() + this.maxReferralFee();
     }
 
     /// @dev Function that gets the maximum amount of rewards that can be claimed by all users. It does not include the protocol fee
@@ -185,9 +206,21 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
         return (this.maxTotalRewards() * questFee) / 10_000;
     }
 
+    function maxReferralFee() external view returns (uint256) {
+        return (this.maxTotalRewards() * referralRewardFee) / 10_000;
+    }
+
     /// @notice Function that calculates the protocol fee
     function protocolFee() external view returns (uint256) {
         return (_redeemedTokens() * rewardAmountInWei * questFee) / 10_000;
+    }
+
+    function referralRewardAmount() external view returns (uint256) {
+        return _referralRewardAmount();
+    }
+
+    function getReferralAmount(address referrer) external view returns (uint256) {
+        return referralClaimAmounts[referrer];
     }
 
     /// @dev Returns the reward amount
@@ -218,6 +251,14 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
         rewardToken.safeTransfer(sender_, amount_);
     }
 
+    /// @notice Internal function to update the referral reward amount
+    /// @param referrer_ The address of the referrer
+    function _updateReferralTokenAmount(address referrer_) internal {
+        uint256 referralAmount = _referralRewardAmount();
+        referralClaimTotal += referralAmount;
+        referralClaimAmounts[referrer_] += referralAmount;
+    }
+
     /*//////////////////////////////////////////////////////////////
                              INTERNAL VIEW
     //////////////////////////////////////////////////////////////*/
@@ -227,6 +268,10 @@ contract Quest is ReentrancyGuardUpgradeable, PausableUpgradeable, Ownable, IQue
 
     function _claimFee() internal view returns (uint256) {
         return questFactoryContract.mintFee();
+    }
+
+    function _referralRewardAmount() internal view returns (uint256) {
+        return (referralRewardFee * rewardAmountInWei) / 10_000;
     }
 
     /*//////////////////////////////////////////////////////////////

@@ -20,22 +20,24 @@ contract TestQuest is Test, TestUtils, Errors, Events {
     uint256 END_TIME = 1_000_000_000;
     uint256 START_TIME = 1_000_000;
     uint256 TOTAL_PARTICIPANTS = 300;
-    uint256 REWARD_AMOUNT_IN_WEI = 1000;
+    uint256 REWARD_AMOUNT_IN_WEI = 10_000_000_000;
     string QUEST_ID = "QUEST_ID";
-    uint16 QUEST_FEE = 2000; // 20%
+    uint16 QUEST_FEE = 250; // 2.5%
     uint256 CLAIM_FEE = 999;
+    uint16 REFERRAL_REWARD_FEE = 250; // 2.5%
     address protocolFeeRecipient = makeAddr("protocolFeeRecipient");
     address questFactoryMock;
     Quest quest;
     address admin = makeAddr(("admin"));
     address owner = makeAddr(("owner"));
     address participant = makeAddr(("participant"));
+    address referrer = makeAddr(("referrer"));
     uint256 defaultTotalRewardsPlusFee;
     string constant DEFAULT_ERC20_NAME = "RewardToken";
     string constant DEFAULT_ERC20_SYMBOL = "RTC";
 
     function setUp() public {
-        defaultTotalRewardsPlusFee = calculateTotalRewardsPlusFee(TOTAL_PARTICIPANTS, REWARD_AMOUNT_IN_WEI, QUEST_FEE);
+        defaultTotalRewardsPlusFee = calculateTotalRewardsPlusFee(TOTAL_PARTICIPANTS, REWARD_AMOUNT_IN_WEI, QUEST_FEE, REFERRAL_REWARD_FEE);
         rewardTokenAddress = address(
             new SampleERC20(
                 DEFAULT_ERC20_NAME,
@@ -56,7 +58,8 @@ contract TestQuest is Test, TestUtils, Errors, Events {
             REWARD_AMOUNT_IN_WEI,
             QUEST_ID,
             QUEST_FEE,
-            protocolFeeRecipient
+            protocolFeeRecipient,
+            REFERRAL_REWARD_FEE
         );
         // Transfer all tokens to quest
         vm.prank(admin);
@@ -94,7 +97,8 @@ contract TestQuest is Test, TestUtils, Errors, Events {
             REWARD_AMOUNT_IN_WEI,
             QUEST_ID,
             QUEST_FEE,
-            protocolFeeRecipient
+            protocolFeeRecipient,
+            REFERRAL_REWARD_FEE
         );
     }
 
@@ -111,38 +115,40 @@ contract TestQuest is Test, TestUtils, Errors, Events {
             REWARD_AMOUNT_IN_WEI,
             QUEST_ID,
             QUEST_FEE,
-            protocolFeeRecipient
+            protocolFeeRecipient,
+            REFERRAL_REWARD_FEE
         );
     }
 
     /*//////////////////////////////////////////////////////////////
-                                PAUSE
+                                CANCEL
     //////////////////////////////////////////////////////////////*/
-    function test_pause() public {
+    function test_cancel() public {
         vm.prank(questFactoryMock);
-        quest.pause();
+        quest.cancel();
         assertTrue(quest.paused(), "paused should be true");
+        assertEq(quest.endTime(), block.timestamp, "endTime should be now (quest not started)");
     }
 
-    function test_RevertIf_pause_Unauthorized() public {
-        vm.expectRevert(abi.encodeWithSelector(Unauthorized.selector));
-        quest.pause();
+    function test_cancel_afterStarted() public {
+        vm.warp(START_TIME);
+        vm.prank(questFactoryMock);
+        quest.cancel();
+        assertTrue(quest.paused(), "paused should be true");
+        assertEq(quest.endTime(), block.timestamp + 15 minutes, "endTime should be 15 minutes from now");
     }
 
-    /*//////////////////////////////////////////////////////////////
-                              UNPAUSE
-    //////////////////////////////////////////////////////////////*/
-    function test_unpause() public {
-        vm.startPrank(questFactoryMock);
-        quest.pause();
-        quest.unPause();
-        assertFalse(quest.paused(), "paused should be false");
-        vm.stopPrank();
+    function test_cancel_alreadyCanceled() public {
+        vm.prank(questFactoryMock);
+        quest.cancel();
+        vm.expectRevert("Pausable: paused");
+        vm.prank(questFactoryMock);
+        quest.cancel();
     }
 
-    function test_RevertIf_unpause_Unauthorized() public {
-        vm.expectRevert(abi.encodeWithSelector(Unauthorized.selector));
-        quest.unPause();
+    function test_RevertIf_cancel_Unauthorized() public {
+        vm.expectRevert(abi.encodeWithSelector(NotQuestFactory.selector));
+        quest.cancel();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -173,7 +179,7 @@ contract TestQuest is Test, TestUtils, Errors, Events {
         currentTime = bound(currentTime, startTime, endTime - 1);
         rewardAmountInWei = bound(rewardAmountInWei, 1, REWARD_AMOUNT_IN_WEI * REWARD_AMOUNT_IN_WEI);
         // Setup a reward token with fuzzed rewardAmountInWei
-        defaultTotalRewardsPlusFee = calculateTotalRewardsPlusFee(TOTAL_PARTICIPANTS, rewardAmountInWei, QUEST_FEE);
+        defaultTotalRewardsPlusFee = calculateTotalRewardsPlusFee(TOTAL_PARTICIPANTS, rewardAmountInWei, QUEST_FEE, REFERRAL_REWARD_FEE);
         rewardTokenAddress = address(
             new SampleERC20(
                 DEFAULT_ERC20_NAME,
@@ -197,7 +203,8 @@ contract TestQuest is Test, TestUtils, Errors, Events {
             rewardAmountInWei,
             QUEST_ID,
             QUEST_FEE,
-            protocolFeeRecipient
+            protocolFeeRecipient,
+            REFERRAL_REWARD_FEE
         );
         // Transfer all tokens to quest
         vm.prank(admin);
@@ -229,15 +236,6 @@ contract TestQuest is Test, TestUtils, Errors, Events {
         quest.singleClaim(participant);
     }
 
-    function test_RevertIf_singleClaim_whenNotPaused() public {
-        vm.startPrank(questFactoryMock);
-        quest.pause();
-        vm.warp(START_TIME);
-        vm.expectRevert("Pausable: paused");
-        quest.singleClaim(participant);
-        vm.stopPrank();
-    }
-
     /*//////////////////////////////////////////////////////////////
                       WITHDRAWREMAININGTOKENS
     //////////////////////////////////////////////////////////////*/
@@ -252,7 +250,7 @@ contract TestQuest is Test, TestUtils, Errors, Events {
         // simulate ETH from TOTAL_PARTICIPANTS claims
         vm.deal(address(quest), (CLAIM_FEE * TOTAL_PARTICIPANTS * 2) / 3);
 
-        uint256 totalFees = calculateTotalFees(TOTAL_PARTICIPANTS, REWARD_AMOUNT_IN_WEI, QUEST_FEE) / 2;
+        uint256 totalFees = calculateTotalProtocolFees(TOTAL_PARTICIPANTS, REWARD_AMOUNT_IN_WEI, QUEST_FEE);
         uint256 questBalance = SampleERC20(rewardTokenAddress).balanceOf(address(quest));
         uint256 questBalanceMinusFees = questBalance - totalFees;
 
@@ -303,6 +301,251 @@ contract TestQuest is Test, TestUtils, Errors, Events {
     }
 
     /*//////////////////////////////////////////////////////////////
+                        CLAIM REFERRAL FEES
+    //////////////////////////////////////////////////////////////*/
+
+    function test_fuzz_claimReferralFees(uint96 timestamp, uint256 participants) public {
+        timestamp = uint96(bound(timestamp, START_TIME+10, END_TIME));
+        participants = bound(participants, 1, TOTAL_PARTICIPANTS);
+
+        vm.startPrank(admin);
+        // Transfer the appropriate amount of Reward tokens to the quest based on fuzzed participants
+        defaultTotalRewardsPlusFee = calculateTotalRewardsPlusFee(participants, REWARD_AMOUNT_IN_WEI, QUEST_FEE, REFERRAL_REWARD_FEE);
+        rewardTokenAddress = address(
+            new SampleERC20(
+                DEFAULT_ERC20_NAME,
+                DEFAULT_ERC20_SYMBOL,
+                defaultTotalRewardsPlusFee,
+                admin
+            )
+        );
+        questFactoryMock = address(new QuestFactoryMock());
+        address payable questAddress = payable(address(new Quest()).cloneDeterministic(keccak256(abi.encodePacked(msg.sender, "SALT"))));
+        quest = Quest(questAddress);
+        vm.stopPrank();
+        vm.prank(questFactoryMock);
+        quest.initialize(
+            rewardTokenAddress,
+            timestamp,
+            START_TIME,
+            participants,
+            REWARD_AMOUNT_IN_WEI,
+            QUEST_ID,
+            QUEST_FEE,
+            protocolFeeRecipient,
+            REFERRAL_REWARD_FEE
+        );
+
+        vm.startPrank(admin);
+        // Set all mocked values in the quest factory
+        QuestFactoryMock(questFactoryMock).setMintFee(CLAIM_FEE);
+        QuestFactoryMock(questFactoryMock).setNumberMinted(participants);
+        // Transfer all tokens to quest
+        SampleERC20(rewardTokenAddress).transfer(address(quest), defaultTotalRewardsPlusFee);
+        vm.stopPrank();
+
+        vm.prank(questFactoryMock);
+        quest.transferOwnership(owner);
+
+        // simulate ETH from TOTAL_PARTICIPANTS claims
+        vm.deal(address(quest), (CLAIM_FEE * participants * 2) / 3);
+
+        vm.warp(START_TIME);
+        for(uint256 i = 1; i <= participants; i++) {
+            participant = makeAddr(i.toString());
+            vm.prank(questFactoryMock);
+
+            quest.claimFromFactory(participant, referrer);
+            assertEq(
+                SampleERC20(rewardTokenAddress).balanceOf(participant),
+                quest.getRewardAmount(),
+                "participant should get the reward amount"
+            );
+            assertEq(
+                quest.getReferralAmount(referrer),
+                quest.referralRewardAmount() * i,
+                "referrer should increase referral rewards after claim"
+            );
+            assertEq(
+                quest.referralClaimTotal(),
+                quest.referralRewardAmount() * i,
+                "referral claims for all referrers should equal the reward amount (single claim)"
+            );
+        }
+
+        vm.warp(timestamp);
+        vm.prank(referrer);
+
+        // verify that withdrawals can still work
+        quest.withdrawRemainingTokens();
+
+        assertEq(
+            SampleERC20(rewardTokenAddress).balanceOf(address(quest)),
+            quest.referralClaimTotal(),
+            "expected to have referralClaimTotal() amount left inside the contract"
+        );
+
+        quest.claimReferralFees(referrer);
+
+        assertEq(
+            SampleERC20(rewardTokenAddress).balanceOf(referrer),
+            quest.referralRewardAmount() * participants,
+            "referrer should claim their allocated referral rewards"
+        );
+
+        uint256 participantBalance = SampleERC20(rewardTokenAddress).balanceOf(participant);
+        uint256 protocolFeeRecipientBalance = SampleERC20(rewardTokenAddress).balanceOf(quest.protocolFeeRecipient());
+        uint256 ownerBalance = SampleERC20(rewardTokenAddress).balanceOf(owner);
+        uint256 referrerBalance = SampleERC20(rewardTokenAddress).balanceOf(referrer);
+        uint256 total = participantBalance + ownerBalance + referrerBalance + protocolFeeRecipientBalance;
+
+        assertEq(
+            protocolFeeRecipientBalance,
+            quest.protocolFee(),
+            "Protocol fee recipient should get their share of the rewards"
+        );
+
+        assertEq(
+            ownerBalance,
+            total - participantBalance - referrerBalance - protocolFeeRecipientBalance,
+            "Owner balance should have the unclaimed funds returned"
+        );
+    }
+
+    function test_fuzz_claimReferralFees_withdrawAfterClaim(uint96 timestamp, uint256 participants) public {
+        timestamp = uint96(bound(timestamp, START_TIME+10, END_TIME));
+        participants = bound(participants, 1, TOTAL_PARTICIPANTS);
+
+        vm.startPrank(admin);
+        // Transfer the appropriate amount of Reward tokens to the quest based on fuzzed participants
+        defaultTotalRewardsPlusFee = calculateTotalRewardsPlusFee(participants, REWARD_AMOUNT_IN_WEI, QUEST_FEE, REFERRAL_REWARD_FEE);
+        rewardTokenAddress = address(
+            new SampleERC20(
+                DEFAULT_ERC20_NAME,
+                DEFAULT_ERC20_SYMBOL,
+                defaultTotalRewardsPlusFee,
+                admin
+            )
+        );
+        questFactoryMock = address(new QuestFactoryMock());
+        address payable questAddress = payable(address(new Quest()).cloneDeterministic(keccak256(abi.encodePacked(msg.sender, "SALT"))));
+        quest = Quest(questAddress);
+        vm.stopPrank();
+        vm.prank(questFactoryMock);
+        quest.initialize(
+            rewardTokenAddress,
+            timestamp,
+            START_TIME,
+            participants,
+            REWARD_AMOUNT_IN_WEI,
+            QUEST_ID,
+            QUEST_FEE,
+            protocolFeeRecipient,
+            REFERRAL_REWARD_FEE
+        );
+
+        vm.startPrank(admin);
+        // Set all mocked values in the quest factory
+        QuestFactoryMock(questFactoryMock).setMintFee(CLAIM_FEE);
+        QuestFactoryMock(questFactoryMock).setNumberMinted(participants);
+        // Transfer all tokens to quest
+        SampleERC20(rewardTokenAddress).transfer(address(quest), defaultTotalRewardsPlusFee);
+        vm.stopPrank();
+
+        vm.prank(questFactoryMock);
+        quest.transferOwnership(owner);
+
+        // simulate ETH from TOTAL_PARTICIPANTS claims
+        vm.deal(address(quest), (CLAIM_FEE * participants * 2) / 3);
+
+        vm.warp(START_TIME);
+        for(uint256 i = 1; i <= participants; i++) {
+            participant = makeAddr(i.toString());
+            vm.prank(questFactoryMock);
+
+            quest.claimFromFactory(participant, referrer);
+            assertEq(
+                SampleERC20(rewardTokenAddress).balanceOf(participant),
+                quest.getRewardAmount(),
+                "participant should get the reward amount"
+            );
+            assertEq(
+                quest.getReferralAmount(referrer),
+                quest.referralRewardAmount() * i,
+                "referrer should increase referral rewards after claim"
+            );
+            assertEq(
+                quest.referralClaimTotal(),
+                quest.referralRewardAmount() * i,
+                "referral claims for all referrers should equal the reward amount (single claim)"
+            );
+        }
+
+        vm.warp(timestamp);
+        vm.prank(referrer);
+
+        quest.claimReferralFees(referrer);
+
+        // verify that withdrawals can still work
+        quest.withdrawRemainingTokens();
+
+        assertEq(
+            SampleERC20(rewardTokenAddress).balanceOf(referrer),
+            quest.referralRewardAmount() * participants,
+            "referrer should claim their allocated referral rewards"
+        );
+
+        uint256 participantBalance = SampleERC20(rewardTokenAddress).balanceOf(participant);
+        uint256 protocolFeeRecipientBalance = SampleERC20(rewardTokenAddress).balanceOf(quest.protocolFeeRecipient());
+        uint256 ownerBalance = SampleERC20(rewardTokenAddress).balanceOf(owner);
+        uint256 referrerBalance = SampleERC20(rewardTokenAddress).balanceOf(referrer);
+        uint256 total = participantBalance + ownerBalance + referrerBalance + protocolFeeRecipientBalance;
+
+        assertEq(
+            protocolFeeRecipientBalance,
+            quest.protocolFee(),
+            "Protocol fee recipient should get their share of the rewards"
+        );
+
+        assertEq(
+            ownerBalance,
+            total - participantBalance - referrerBalance - protocolFeeRecipientBalance,
+            "Owner balance should have the unclaimed funds returned"
+        );
+    }
+
+    function test_RevertIf_test_claimReferralFees_NoWithdrawDuringClaim() public {
+        vm.expectRevert(abi.encodeWithSelector(NoWithdrawDuringClaim.selector));
+        vm.prank(referrer);
+        quest.claimReferralFees(referrer);
+    }
+
+    function test_RevertIf_test_claimReferralFees_AlreadyWithdrawn() public {
+        vm.warp(START_TIME);
+        vm.prank(questFactoryMock);
+        quest.claimFromFactory(participant, referrer);
+
+        vm.warp(END_TIME);
+        vm.prank(referrer);
+        quest.claimReferralFees(referrer);
+
+        vm.expectRevert(abi.encodeWithSelector(AlreadyWithdrawn.selector));
+        vm.prank(referrer);
+        quest.claimReferralFees(referrer);
+    }
+
+    function test_RevertIf_test_claimReferralFees_NoReferralFees() public {
+        vm.warp(START_TIME);
+        vm.prank(questFactoryMock);
+        quest.claimFromFactory(participant, participant);
+
+        vm.expectRevert(abi.encodeWithSelector(NoReferralFees.selector));
+        vm.warp(END_TIME);
+        vm.prank(referrer);
+        quest.claimReferralFees(referrer);
+    }
+
+    /*//////////////////////////////////////////////////////////////
                             EXTERNAL VIEW
     //////////////////////////////////////////////////////////////*/
 
@@ -321,7 +564,7 @@ contract TestQuest is Test, TestUtils, Errors, Events {
     function test_maxProtocolReward() public {
         assertEq(
             quest.maxProtocolReward(),
-            calculateTotalFees(TOTAL_PARTICIPANTS, REWARD_AMOUNT_IN_WEI, QUEST_FEE),
+            calculateTotalProtocolFees(TOTAL_PARTICIPANTS, REWARD_AMOUNT_IN_WEI, QUEST_FEE),
             "maxProtocolReward should be correct"
         );
     }
@@ -332,5 +575,9 @@ contract TestQuest is Test, TestUtils, Errors, Events {
 
     function test_getRewardToken() public {
         assertEq(quest.getRewardToken(), rewardTokenAddress, "getRewardToken should be correct");
+    }
+
+    function test_getReferralRewardFee() public {
+        assertEq(quest.referralRewardFee(), REFERRAL_REWARD_FEE, "referralRewardFee should be correct");
     }
 }
